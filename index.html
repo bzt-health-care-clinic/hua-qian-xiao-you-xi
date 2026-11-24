@@ -608,6 +608,7 @@
             <option value="priceAsc">价格从低到高</option>
             <option value="priceDesc">价格从高到低</option>
           </select>
+          <button class="restock-btn" id="shuffleBtn" type="button" title="换一批，看看不一样的宝贝；买过同类会优先推">🔀 换一批</button>
           <button class="restock-btn" id="restockBtn" type="button" title="把买过下架的宝贝重新上架">📦 补货上新</button>
         </div>
         <nav class="cats" id="cats" aria-label="商品分类"></nav>
@@ -1444,6 +1445,7 @@ function IMG(k){return (window.__IMGS&&window.__IMGS[k])||k;}
         cat: "全部",
         query: "",
         sort: "hot",
+        shuffleOrder: null, // 换一批后的展示顺序（商品 id 数组）
         celebrated: {} // title thresholds toasted this round
       };
 
@@ -1557,7 +1559,7 @@ function IMG(k){return (window.__IMGS&&window.__IMGS[k])||k;}
           var b = document.createElement("button");
           b.type = "button"; b.className = "cat" + (state.cat === c ? " on" : "");
           b.textContent = c;
-          b.addEventListener("click", function () { state.cat = c; renderCats(); renderGrid(); });
+          b.addEventListener("click", function () { state.cat = c; state.shuffleOrder = null; renderCats(); renderGrid(); });
           catsEl.appendChild(b);
         });
       }
@@ -1571,8 +1573,54 @@ function IMG(k){return (window.__IMGS&&window.__IMGS[k])||k;}
         if (state.sort === "priceAsc") list.sort(function (a, b) { return a.price - b.price; });
         else if (state.sort === "priceDesc") list.sort(function (a, b) { return b.price - a.price; });
         else list.sort(function (a, b) { return b.sold - a.sold; });
+        if (state.shuffleOrder) {
+          var order = {};
+          state.shuffleOrder.forEach(function (id, idx) { order[id] = idx; });
+          list.sort(function (a, b) {
+            var ai = order.hasOwnProperty(a.id) ? order[a.id] : 1e9;
+            var bi = order.hasOwnProperty(b.id) ? order[b.id] : 1e9;
+            return ai - bi;
+          });
+        }
         return list;
       }
+      /* ---------- 换一批：按买过的东西推同类 ---------- */
+      var SIM_KEYS = ["明日方舟", "终末地", "原神", "崩坏星穹铁道", "星穹铁道", "鸣潮", "剑网3", "崩坏3"];
+      function simKeywords(name) {
+        var found = [];
+        SIM_KEYS.forEach(function (k) { if (name && name.indexOf(k) !== -1) found.push(k); });
+        return found;
+      }
+      function shareKeyword(a, b) {
+        var ka = simKeywords(a), kb = simKeywords(b);
+        for (var i = 0; i < ka.length; i++) if (kb.indexOf(ka[i]) !== -1) return true;
+        return false;
+      }
+      function shuffleScore(p) {
+        var s = 0, bought = Object.keys(state.owned);
+        for (var i = 0; i < bought.length; i++) {
+          var b = byId[bought[i]];
+          if (!b || b.id === p.id) continue;
+          if (p.cat && b.cat && p.cat === b.cat) s += 3; // 同分类
+          if (p.tag && b.tag && p.tag === b.tag) s += 2; // 同店
+          if (shareKeyword(p.name, b.name)) s += 2; // 同 IP
+          if (p.price >= b.price * 0.5 && p.price <= b.price * 2) s += 1; // 价位接近
+        }
+        return s;
+      }
+      function doShuffle() {
+        state.shuffleOrder = null;
+        var list = visibleProducts();
+        var scored = list.map(function (p) {
+          return { p: p, key: Math.random() / (1 + shuffleScore(p)) };
+        });
+        scored.sort(function (a, b) { return a.key - b.key; });
+        state.shuffleOrder = scored.map(function (x) { return x.p.id; });
+        renderGrid();
+        var boughtCount = Object.keys(state.owned).length;
+        toast(boughtCount ? "🔀 换了一批～优先推了你买过的同类！" : "🔀 换了一批～看看有没有新喜欢的！");
+      }
+      $("shuffleBtn").addEventListener("click", doShuffle);
       function renderGrid() {
         var list = visibleProducts();
         grid.innerHTML = "";
@@ -1783,15 +1831,17 @@ function IMG(k){return (window.__IMGS&&window.__IMGS[k])||k;}
       /* ---------- Search / sort ---------- */
       function doSearch() {
         state.query = $("searchInput").value.trim();
+        state.shuffleOrder = null;
         renderGrid();
       }
       $("searchGo").addEventListener("click", doSearch);
       $("searchInput").addEventListener("input", doSearch);
       $("searchInput").addEventListener("keydown", function (e) { if (e.key === "Enter") doSearch(); });
-      $("sortSel").addEventListener("change", function () { state.sort = this.value; renderGrid(); });
+      $("sortSel").addEventListener("change", function () { state.sort = this.value; state.shuffleOrder = null; renderGrid(); });
 
       /* ---------- 补货上新：把买过下架的宝贝重新上架 ---------- */
       function restockShop() {
+        state.shuffleOrder = null;
         var hidden = Object.keys(state.owned).filter(function (id) { return !state.restocked[id]; });
         if (!hidden.length) { toast("暂时没有可补货的宝贝，先去买买买吧～"); return; }
         hidden.forEach(function (id) { state.restocked[id] = true; });
